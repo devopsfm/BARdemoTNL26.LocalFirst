@@ -3,6 +3,8 @@ using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using OpenAI;
+using Polly;
+using System.Net.Http;
 
 var profile = args.Length > 0 ? args[0] : "local";
 var config = new ConfigurationBuilder()
@@ -24,7 +26,13 @@ IChatClient client = new OpenAIClient(
 const string prompt = "In two sentences, explain prefill versus decode in LLM inference to a .NET developer.";
 
 var sw = Stopwatch.StartNew();
-ChatResponse response = await client.GetResponseAsync(prompt);
+ChatResponse response = await Policy
+    .Handle<HttpRequestException>()
+    .Or<ClientResultException>(ex => ex.Status == 429 || (ex.Status >= 500 && ex.Status <= 599))
+    .WaitAndRetryAsync(
+        retryCount: 3,
+        sleepDurationProvider: retryAttempt => TimeSpan.FromMilliseconds(500 * Math.Pow(2, retryAttempt - 1)))
+    .ExecuteAsync(async () => await client.GetResponseAsync(prompt));
 sw.Stop();
 
 Console.WriteLine(response.Text);
